@@ -275,13 +275,28 @@ re-setup. Name it for the partner (`hermes-dan`, `hermes-<partnerB>`, `hermes-<p
   `~/.hermes/google_token.json` (`chmod 600`). Scope-minimize per partner.
 
 ### 5.3 Google Chat (all partners) — per-agent Pub/Sub
-Per agent: service account + JSON key (`chmod 600`), Pub/Sub topic + pull subscription
-(7-day retention), IAM `chat-api-push@system.gserviceaccount.com` = Publisher on the
-**topic**, your SA = Subscriber+Viewer on the **subscription**, configure the Chat app
-(Cloud Pub/Sub connection → topic, visibility restricted to workspace). Then `.env`:
-`GOOGLE_CHAT_PROJECT_ID`, `GOOGLE_CHAT_SUBSCRIPTION_NAME`, `GOOGLE_CHAT_SERVICE_ACCOUNT_JSON`,
+Per agent: Pub/Sub topic + pull subscription (7-day retention), IAM
+`chat-api-push@system.gserviceaccount.com` = Publisher on the **topic**, GCE instance SA =
+Subscriber+Viewer on the **subscription**, configure the Chat app (Cloud Pub/Sub connection
+→ topic, visibility restricted to workspace).
+
+Hermes authenticates to Pub/Sub via ADC — `plugins/platforms/google_chat/adapter.py`
+falls back to `google.auth.default()` when `GOOGLE_CHAT_SERVICE_ACCOUNT_JSON` is unset,
+which picks up the instance SA. No per-partner SA, no key file on disk; the org policy
+`iam.disableServiceAccountKeyCreation` stays enforced. Tradeoff: GCP-level audit logs
+attribute all partners' subscription pulls to the instance SA (the subscription name still
+scopes each log entry to one partner, but identity is shared).
+
+`.env`: `GOOGLE_CHAT_PROJECT_ID`, `GOOGLE_CHAT_SUBSCRIPTION_NAME`,
 `GOOGLE_CHAT_ALLOWED_USERS=<that partner only>`. Optional `/setup-files` per-user OAuth for
 native attachments.
+
+The `agents/provision-chat.sh` wrapper does all of the above end-to-end. The topic
+publisher binding is blocked by the `iam.allowedPolicyMemberDomains` (DRS) org policy by
+default — toggle a project-level override during apply, then restore it after (existing
+bindings persist). When the partner base grows past three trusting co-founders, move to
+one VM per partner so kernel-escape blast radius drops back to a single identity, and
+adopt per-partner SAs via WIF or impersonation.
 
 ### 5.4 WhatsApp (partner "dan" only)
 Dedicated number (Google Voice / prepaid SIM / VoIP — not personal). `hermes whatsapp` →

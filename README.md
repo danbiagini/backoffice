@@ -96,17 +96,24 @@ and then provision their Chat channel from your laptop:
 
 ```bash
 cd agents/
-tofu init -backend-config=backend.hcl
-export PROJECT=YOUR_GCP_PROJECT_ID
+cp backend.hcl.example backend.hcl    # edit to set your bucket
 ./provision-chat.sh <partner> <allowed-email> <container-name>
 # e.g.  ./provision-chat.sh dan dan@example.com hermes-dan
 ```
 
-The script runs the per-partner Terraform (own SA, own topic, own
-subscription, two IAM bindings), generates the SA key with `gcloud`
-(deliberately outside TF state), pushes it into the container, writes
+The script must run on the FreeDB host — it queries the GCE metadata
+server for the project ID and instance SA, and uses `sudo incus` to
+wire the container. It does `tofu init`, runs the per-partner
+Terraform (topic, subscription, two IAM bindings), writes
 `~/.hermes/.env`, and restarts the gateway. It prints the one manual
 Cloud Console step at the end (the Chat app connection).
+
+Hermes authenticates to Pub/Sub via Application Default Credentials —
+no per-partner service account, no JSON key on disk. The GCE instance
+SA is the subscriber on every partner's subscription, which keeps
+`iam.disableServiceAccountKeyCreation` enforceable. See the runbook §5.3
+for the security tradeoff (shared identity in audit logs, blast radius
+unchanged from the documented shared-kernel posture).
 
 Each partner gets their own `tofu workspace` so per-partner state is
 isolated — `provision-chat.sh` handles the workspace switch.

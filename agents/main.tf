@@ -1,20 +1,26 @@
 # Per-partner Google Chat Pub/Sub provisioning for Hermes agents.
 #
-# Scope: ONE partner per `tofu workspace` (or per -var partner=...). Creates the
-# isolated cloud resources a single Hermes agent needs to receive Google Chat
-# events: a dedicated service account, a Pub/Sub topic + pull subscription, and
-# the two IAM bindings. Each partner gets their own set so a leaked credential
-# reaches only that partner's chat stream.
+# Scope: ONE partner per `tofu workspace` (or per -var partner=...). Creates
+# the isolated cloud resources a single Hermes agent needs to receive Google
+# Chat events: a dedicated topic + pull subscription and the two required
+# IAM bindings.
+#
+# No per-partner service account, no key file: Hermes authenticates to
+# Pub/Sub via ADC using the GCE instance SA (see ../docs/hermes-clean-runbook.md
+# for the rationale). The instance SA is the subscriber on every partner's
+# subscription. Tradeoff: GCP-level audit logs don't distinguish partners by
+# identity (the subscription name still scopes the log entry to one partner),
+# but no long-lived SA keys ever land on disk so
+# `iam.disableServiceAccountKeyCreation` stays enforced.
 #
 # NOT handled here (by design):
-#   - The SA *key file* — keys in TF state are an anti-pattern. The wrapper
-#     script (provision-chat.sh) generates the key with gcloud, outside state.
-#   - The Chat *app* config (name, Pub/Sub connection, visibility) — Console-only,
-#     no Terraform/gcloud resource exists. The wrapper prints a reminder.
+#   - The Chat *app* config (name, Pub/Sub connection, visibility) —
+#     Console-only, no Terraform/gcloud resource exists. The wrapper prints
+#     a reminder.
 #   - Container wiring (.env, gateway restart) — done by the wrapper.
 #
-# State: uses the same GCS bucket as infra/, different prefix, so partner applies
-# never touch host/platform state. Use one workspace per partner.
+# State: uses the same GCS bucket as infra/, different prefix, so partner
+# applies never touch host/platform state. Use one workspace per partner.
 
 # Partial backend config — bucket/prefix come from `backend.hcl` (gitignored).
 # Init with:  tofu init -backend-config=backend.hcl
@@ -43,6 +49,11 @@ variable "partner" {
   }
 }
 
+variable "subscriber_sa_email" {
+  type        = string
+  description = "Email of the GCE instance SA that subscribes via ADC. provision-chat.sh discovers this from the metadata server."
+}
+
 provider "google" {
   project = var.project
   region  = "us-central1"
@@ -51,13 +62,6 @@ provider "google" {
 
 locals {
   prefix = "hermes-chat-${var.partner}"
-}
-
-# Dedicated SA for THIS partner's agent. No project-level roles — its only
-# authority is Subscriber+Viewer on its own subscription (granted below).
-resource "google_service_account" "chat" {
-  account_id   = local.prefix
-  display_name = "Hermes Chat bot — ${var.partner}"
 }
 
 # One topic per partner: mirrors the one-bot-per-agent design and avoids
@@ -85,17 +89,20 @@ resource "google_pubsub_subscription" "chat" {
 # IAM binding #1 — on the TOPIC. The Google Chat push service must be allowed
 # to publish events here. THIS IS THE BINDING EVERYONE FORGETS; without it the
 # bot connects but silently receives nothing.
+# NOTE: this binding is rejected by the iam.allowedPolicyMemberDomains (DRS)
+# org policy unless the project has an override. provision-chat.sh prints a
+# reminder if onboarding fails on this resource.
 resource "google_pubsub_topic_iam_member" "chat_push_publisher" {
   topic  = google_pubsub_topic.chat.id
   role   = "roles/pubsub.publisher"
   member = "serviceAccount:chat-api-push@system.gserviceaccount.com"
 }
 
-# IAM binding #2 — on the SUBSCRIPTION. Our partner SA may subscribe...
+# IAM binding #2 — on the SUBSCRIPTION. The GCE instance SA may subscribe...
 resource "google_pubsub_subscription_iam_member" "sa_subscriber" {
   subscription = google_pubsub_subscription.chat.id
   role         = "roles/pubsub.subscriber"
-  member       = "serviceAccount:${google_service_account.chat.email}"
+  member       = "serviceAccount:${var.subscriber_sa_email}"
 }
 
 # ...and may call subscription.get() (Hermes does this at startup as a
@@ -103,14 +110,10 @@ resource "google_pubsub_subscription_iam_member" "sa_subscriber" {
 resource "google_pubsub_subscription_iam_member" "sa_viewer" {
   subscription = google_pubsub_subscription.chat.id
   role         = "roles/pubsub.viewer"
-  member       = "serviceAccount:${google_service_account.chat.email}"
+  member       = "serviceAccount:${var.subscriber_sa_email}"
 }
 
 # Outputs consumed by the wrapper script to write the container .env.
-output "service_account_email" {
-  value = google_service_account.chat.email
-}
-
 output "topic_id" {
   value = google_pubsub_topic.chat.id
 }
