@@ -81,10 +81,16 @@ echo
 echo "MANUAL STEP (Console-only, no API):"
 cat <<EOF
 
+  Prereq (one-time per project): enable the Chat API. The Configuration page
+  below only appears after this:
+    gcloud services enable chat.googleapis.com --project=${PROJECT}
+
   Configure the Chat app in the Cloud Console (one-time per partner):
-    Console → APIs & Services → Google Chat API → Configuration
+    https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat?project=${PROJECT}
+      • Leave 'Build this Chat app as a Google Workspace add-on' UNCHECKED
+        (the Pub/Sub option only appears in the non-add-on flow)
       • App name / avatar / description
-      • Functionality: enable 'Receive 1:1 messages' AND
+      • Interactive features: enable 'Receive 1:1 messages' AND
         'Join spaces and group conversations'
       • Connection settings: Cloud Pub/Sub
           topic = ${APP_TOPIC}
