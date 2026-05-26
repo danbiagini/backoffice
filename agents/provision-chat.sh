@@ -40,8 +40,8 @@ trap 'rm -f "$TMP_KEY"' EXIT
 
 echo "==> 1/6  Terraform: provisioning Chat cloud resources for '${PARTNER}'"
 # One workspace per partner so each partner has isolated TF state.
+tofu init -input=false -backend-config=backend.hcl >/dev/null
 tofu workspace select "$PARTNER" 2>/dev/null || tofu workspace new "$PARTNER"
-tofu init -input=false >/dev/null
 tofu apply -input=false -auto-approve \
   -var "project=${PROJECT}" \
   -var "partner=${PARTNER}"
