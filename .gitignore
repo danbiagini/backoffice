@@ -1,0 +1,47 @@
+# Terraform / OpenTofu
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.auto.tfvars
+*.auto.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# tfvars hold project IDs / SA emails — commit templates only
+*.tfvars
+!*.tfvars.example
+
+# Partial-backend configs (point Terraform at your own GCS bucket) — templates only
+backend.hcl
+!backend.hcl.example
+
+# Runtime LiteLLM config (hardcodes vertex_project) — template only
+config/litellm/config.yaml
+
+# Secrets: service-account keys, OAuth tokens, env files
+*.pem
+*.key
+google-chat-sa*.json
+service-account*.json
+credentials*.json
+client_secret*.json
+google_token*.json
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

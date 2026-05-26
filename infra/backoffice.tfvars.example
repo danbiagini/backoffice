@@ -1,0 +1,4 @@
+env                = "backoffice"
+subnet_cidr        = "10.0.2.0/24"
+project            = "your-gcp-project-id"
+service_account_id = "freedb@your-gcp-project-id.iam.gserviceaccount.com"
