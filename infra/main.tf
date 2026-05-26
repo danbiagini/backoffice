@@ -157,8 +157,16 @@ resource "google_compute_instance" "default" {
   }
 
   service_account {
-    scopes = ["cloud-platform"]
-    email  = data.google_service_account.default.email
+    # cloud-platform covers Vertex AI / Pub/Sub / Storage / etc.
+    # Workspace APIs (Chat, Gmail, Calendar, Drive) are NOT covered by
+    # cloud-platform on GCE instance SAs — they need their specific scope
+    # added explicitly. chat.bot lets the Hermes containers act as the
+    # configured Google Chat app via ADC, no SA key file needed.
+    scopes = [
+      "cloud-platform",
+      "https://www.googleapis.com/auth/chat.bot",
+    ]
+    email = data.google_service_account.default.email
   }
 }
 
