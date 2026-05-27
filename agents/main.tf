@@ -190,6 +190,16 @@ resource "google_service_account_iam_member" "pubsub_sa_token_creator" {
   member             = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
 }
 
+# 2nd-gen function builds run as the default Compute Engine SA (as of Aug 2024
+# Google migrated off the legacy Cloud Build SA). That binding is no longer
+# auto-granted on new projects, so CF deploys fail with "missing permission on
+# the build service account". Grant it explicitly here.
+resource "google_project_iam_member" "build_sa_builder" {
+  project = var.project
+  role    = "roles/cloudbuild.builds.builder"
+  member  = "serviceAccount:${data.google_project.current.number}-compute@developer.gserviceaccount.com"
+}
+
 # Source upload: zip router/ on apply, push to a dedicated bucket.
 resource "google_storage_bucket" "cf_source" {
   name                        = "${var.project}-cf-source"
@@ -248,11 +258,14 @@ resource "google_cloudfunctions2_function" "router" {
     service_account_email = google_service_account.router.email
   }
 
-  # Ensure IAM lands before the trigger tries to use it.
+  # Ensure IAM lands before the trigger tries to use it AND before the build
+  # runs (the builder binding propagates eventually-consistent; with apply-time
+  # ordering we sidestep flaky first-builds).
   depends_on = [
     google_project_iam_member.router_event_receiver,
     google_project_iam_member.router_run_invoker,
     google_service_account_iam_member.pubsub_sa_token_creator,
+    google_project_iam_member.build_sa_builder,
   ]
 }
 
