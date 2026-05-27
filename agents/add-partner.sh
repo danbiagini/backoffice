@@ -39,13 +39,15 @@ SUB_NAME="projects/${PROJECT}/subscriptions/hermes-chat-${PARTNER}-sub"
 echo "    project:      ${PROJECT}"
 echo "    subscription: ${SUB_NAME}"
 
-echo "==> 2/3  Writing Chat config into container ~/.hermes/.env (upsert)"
+HERMES_UID="$(sudo incus exec "$CONTAINER" -- id -u hermes)"
+
+echo "==> 2/4  Writing Chat config into container ~/.hermes/.env (upsert)"
 # Remove any prior GOOGLE_CHAT_* lines, then append fresh ones. No
 # GOOGLE_CHAT_SERVICE_ACCOUNT_JSON — Hermes uses ADC via the instance SA.
 # GOOGLE_CHAT_ALLOWED_USERS is defense in depth: the router already filters
 # by sender email, but Hermes drops messages from anyone outside this list
 # even if the router misroutes.
-sudo incus exec "$CONTAINER" --user "$(sudo incus exec "$CONTAINER" -- id -u hermes)" \
+sudo incus exec "$CONTAINER" --user "$HERMES_UID" \
   --env HOME=/home/hermes -- bash -c "
     set -e
     ENV=/home/hermes/.hermes/.env
@@ -59,7 +61,16 @@ sudo incus exec "$CONTAINER" --user "$(sudo incus exec "$CONTAINER" -- id -u her
     chmod 600 \"\$ENV\"
   "
 
-echo "==> 3/3  Restarting gateway to pick up the Chat platform"
+echo "==> 3/4  Enabling google_chat platform in Hermes config (idempotent)"
+# Golden ships with the gateway idle (no platforms in config.yaml). Activation
+# happens here so each partner's clone goes from idle → live in one step.
+# `hermes config set` is idempotent; re-running this script is safe.
+sudo incus exec "$CONTAINER" --user "$HERMES_UID" \
+  --env HOME=/home/hermes -- \
+  /home/hermes/.hermes/hermes-agent/venv/bin/python -m hermes_cli.main \
+    config set platforms.google_chat.enabled true
+
+echo "==> 4/4  Restarting gateway to pick up the Chat platform"
 sudo incus exec "$CONTAINER" -- systemctl restart hermes-gateway
 sleep 3
 sudo incus exec "$CONTAINER" -- systemctl is-active hermes-gateway
