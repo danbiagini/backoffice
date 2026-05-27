@@ -91,4 +91,9 @@ Test path:
     (expect: router.routed email=${ALLOWED_EMAIL} partner=${PARTNER})
   - Watch container: sudo incus exec ${CONTAINER} -- journalctl -u hermes-gateway -n 30 --no-pager | grep GoogleChat
 
+Tell ${ALLOWED_EMAIL} on their first DM with the bot:
+  1. They will see a "📬 No home channel is set" prompt before the real reply.
+  2. Type /sethome in the DM to pin it as their cron/notification destination.
+  3. Subsequent messages get a direct reply with no prompt.
+
 EOF

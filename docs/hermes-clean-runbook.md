@@ -390,15 +390,33 @@ sudo incus snapshot create hermes-dan configured
 
 ---
 
-## 7. Open items / decisions still yours
+## 7. Decisions log
 
-1. **Gateway-in-golden vs per-partner** (§4) — recommended: idle gateway in golden.
-2. **Google Chat vs WhatsApp per partner** — Chat for all (cleaner, admin-controlled),
-   WhatsApp added only for "dan".
-3. **Memory limit value** — `3GiB` fuse is a starting guess; tune to real usage. Raise live
-   with `sudo incus config set hermes-<name> limits.memory <N>GiB`.
-4. **Retire `dan-agent`** — keep as experiment sandbox or delete once `hermes-clean` is golden.
-5. **LiteLLM binary path in the systemd unit** (§3.10) — verify against `which litellm`.
+### Resolved
+
+- **Gateway-in-golden** (§4) — idle gateway baked into golden-v3; `add-partner.sh`
+  enables the platform per clone. Confirmed working end-to-end 2026-05-27.
+- **Chat for all partners** — muxed architecture (§5.3) settled. One Chat app,
+  CF router, per-partner topics. Scales to as many partners as fit in
+  `var.partner_map`.
+- **Retired `dan-agent`** — `hermes-dan` cloned from `golden-v3` is the canonical
+  production container for dan. `dan-agent` can be deleted (or kept as an
+  experiment sandbox).
+
+### Outstanding
+
+- **WhatsApp for "dan"** — Chat is live for all three partners; WhatsApp is still
+  unimplemented (§5.4). Pick this up only after the Chat-only flow has been
+  steady for a few weeks.
+- **Memory limit tuning** — `3GiB` fuse is a starting guess; tune to real usage
+  once partners have been running for a while. Raise live with
+  `sudo incus config set hermes-<name> limits.memory <N>GiB`.
+- **LiteLLM binary path in the systemd unit** (§3.10) — verify against
+  `which litellm` whenever the LiteLLM install path changes (uv tool updates).
+- **Per-partner SA migration** — when the partner base grows past three trusting
+  co-founders, swap the muxed-with-shared-SA model for per-partner SAs via
+  impersonation. The Hermes patch needed is documented in
+  `[[hermes-impersonation-patch]]`.
 
 ---
 
