@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import base64
 import json
-import logging
 import os
 
 import functions_framework
@@ -38,9 +37,10 @@ PARTNER_MAP: dict[str, str] = json.loads(os.environ.get("PARTNER_MAP", "{}"))
 # subscriptions with noise and many have no sender in the body at all.
 _ROUTABLE_EVENT_TYPES = frozenset({"MESSAGE"})
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("hermes-chat-router")
-
+# All audit output uses print() instead of stdlib logging. functions-framework
+# configures its own root logger in CF 2nd gen, which makes logger.info(...)
+# calls invisible in Cloud Logging; print(..., flush=True) reliably lands in
+# the cloud_run_revision stream.
 _publisher = pubsub_v1.PublisherClient()
 
 
@@ -59,9 +59,9 @@ def route(cloud_event: CloudEvent) -> None:
         return
 
     event_type = body.get("type", "")
-    print(f"router.received type={event_type} body_keys={sorted(body.keys())}", flush=True)
-
     if event_type not in _ROUTABLE_EVENT_TYPES:
+        # Non-routable events (ADDED_TO_SPACE etc.) are common and expected.
+        # Silent ack keeps the audit log clean.
         return
 
     sender_email = (
@@ -73,7 +73,7 @@ def route(cloud_event: CloudEvent) -> None:
     )
 
     if not sender_email:
-        print(f"router.no_sender type={event_type} body_keys={sorted(body.keys())}", flush=True)
+        print(f"router.no_sender type={event_type}", flush=True)
         return
 
     partner = PARTNER_MAP.get(sender_email)
@@ -83,8 +83,6 @@ def route(cloud_event: CloudEvent) -> None:
 
     target_topic = f"projects/{PROJECT_ID}/topics/hermes-chat-{partner}"
 
-    # Forward the body verbatim. Chat doesn't set any Pub/Sub attributes,
-    # so there's nothing to preserve there.
     future = _publisher.publish(
         target_topic,
         data=base64.b64decode(raw),
