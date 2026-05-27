@@ -48,7 +48,7 @@ def route(cloud_event: CloudEvent) -> None:
     attributes = pubsub_message.get("attributes") or {}
     ce_type = attributes.get("ce-type", "")
 
-    logger.info("router.received ce-type=%s attrs=%s", ce_type, sorted(attributes.keys()))
+    print(f"router.received ce-type={ce_type} attrs={sorted(attributes.keys())}", flush=True)
 
     if ce_type not in _ROUTABLE_CE_TYPES:
         # Quiet path — these are common and expected (every reaction fires one).
