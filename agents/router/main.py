@@ -44,7 +44,9 @@ _publisher = pubsub_v1.PublisherClient()
 
 @functions_framework.cloud_event
 def route(cloud_event: CloudEvent) -> None:
+    print(f"router.envelope ce_type={cloud_event['type']} ce_source={cloud_event['source']} data_keys={sorted(cloud_event.data.keys())}", flush=True)
     pubsub_message = cloud_event.data["message"]
+    print(f"router.message keys={sorted(pubsub_message.keys())} attrs={pubsub_message.get('attributes')}", flush=True)
     attributes = pubsub_message.get("attributes") or {}
     ce_type = attributes.get("ce-type", "")
 
