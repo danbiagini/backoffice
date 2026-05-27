@@ -1,0 +1,15 @@
+project = "your-gcp-project-id"
+
+# Email of the GCE instance SA that subscribes via ADC. On the FreeDB host
+# you can discover it with:
+#   curl -s -H 'Metadata-Flavor: Google' \
+#     http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email
+subscriber_sa_email = "freedb@your-gcp-project-id.iam.gserviceaccount.com"
+
+# Workspace email -> short partner ID. Drives both per-partner topic creation
+# and the Cloud Function's routing table. Adding a partner = add an entry +
+# tofu apply (then run ./add-partner.sh on the host to wire their container).
+partner_map = {
+  # "you@your-domain.com" = "test"
+  # "dan@your-domain.com" = "dan"
+}
