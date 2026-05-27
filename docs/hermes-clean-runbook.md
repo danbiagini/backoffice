@@ -216,7 +216,39 @@ Hermes gateway — **DECISION POINT, see §4.** The gateway is what *listens* fo
 messages. It can go in golden (started but with no platform enabled yet) OR be part of
 per-partner setup. Recommendation below.
 
-### 3.11 Clean live state, then snapshot
+### 3.11 Bake the Google Chat dependencies (`golden-v3` and later)
+Google Chat is the default messaging platform for the partner agents. The
+Hermes Chat plugin needs four pieces baked into golden so per-partner clones
+go from idle → live with one `add-partner.sh` call:
+
+```bash
+# A. Systemd drop-ins — make .env load and stdout unbuffered under systemd.
+sudo incus exec hermes-clean -- bash -c '
+  mkdir -p /etc/systemd/system/hermes-gateway.service.d
+  cat > /etc/systemd/system/hermes-gateway.service.d/env.conf <<EOF
+[Service]
+EnvironmentFile=/home/hermes/.hermes/.env
+EOF
+  cat > /etc/systemd/system/hermes-gateway.service.d/python-unbuffered.conf <<EOF
+[Service]
+Environment="PYTHONUNBUFFERED=1"
+EOF
+  systemctl daemon-reload
+'
+
+# B. Python deps for the Chat plugin (no Hermes extra exists in v0.14.0).
+sudo incus exec hermes-clean --user $(sudo incus exec hermes-clean -- id -u hermes) \
+  --env HOME=/home/hermes \
+  --env VIRTUAL_ENV=/home/hermes/.hermes/hermes-agent/venv -- \
+  /home/hermes/.local/bin/uv pip install \
+    google-cloud-pubsub google-api-python-client google-auth google-auth-oauthlib
+```
+
+> Golden ships with `platforms.google_chat.enabled` UNSET so the idle gateway
+> boots quietly. `add-partner.sh` runs `hermes config set platforms.google_chat.enabled true`
+> per clone — partner activation is layer 2.
+
+### 3.12 Clean live state, then snapshot
 Strip any test conversation/session so the golden image is truly state-free:
 ```bash
 # as hermes:
@@ -226,10 +258,12 @@ rm -rf ~/.hermes/sessions/* ~/.hermes/logs/* 2>/dev/null
 Snapshot:
 ```bash
 # on the host:
-sudo incus snapshot create hermes-clean golden
+sudo incus snapshot create hermes-clean golden-v3
 sudo incus snapshot list hermes-clean
 ```
 **This snapshot is your golden base and your disaster-recovery point.**
+Bump the snapshot label (`golden-v3`, `-v4`, ...) whenever §3.11 changes so
+clones always pick up the current bake recipe.
 
 ---
 
@@ -259,11 +293,12 @@ For each partner (do partner "dan" first as the template):
 
 ### 5.1 Clone the golden snapshot into a named container
 ```bash
-sudo incus copy hermes-clean/golden hermes-dan
+sudo incus copy hermes-clean/golden-v3 hermes-dan
 sudo incus start hermes-dan
 ```
-The clone inherits all of layer 1 — working LiteLLM, Hermes, model config — with zero
-re-setup. Name it for the partner (`hermes-dan`, `hermes-<partnerB>`, `hermes-<partnerC>`).
+The clone inherits all of layer 1 — working LiteLLM, Hermes, model config, Chat
+plugin deps, systemd drop-ins — with zero re-setup. Name it for the partner
+(`hermes-dan`, `hermes-<partnerB>`, `hermes-<partnerC>`).
 
 ### 5.2 Google Workspace skill — per-partner OAuth
 - One-time host-side: one Desktop-app OAuth client in `your-gcp-project-id`, reused across
@@ -274,29 +309,55 @@ re-setup. Name it for the partner (`hermes-dan`, `hermes-<partnerB>`, `hermes-<p
   own device → paste the redirected URL back → `--auth-code ...`). Token lands at
   `~/.hermes/google_token.json` (`chmod 600`). Scope-minimize per partner.
 
-### 5.3 Google Chat (all partners) — per-agent Pub/Sub
-Per agent: Pub/Sub topic + pull subscription (7-day retention), IAM
-`chat-api-push@system.gserviceaccount.com` = Publisher on the **topic**, GCE instance SA =
-Subscriber+Viewer on the **subscription**, configure the Chat app (Cloud Pub/Sub connection
-→ topic, visibility restricted to workspace).
+### 5.3 Google Chat (all partners) — muxed architecture
+**One** Chat app feeds **all** partners via a single ingress topic, a Cloud Function
+router that demuxes by sender email, and per-partner topics + subscriptions. See the
+header comment in `agents/main.tf` for the full design and trade-offs. Why muxed: Google
+caps Chat apps at one per GCP project, so per-partner apps don't scale; the router gets
+us logical isolation without that limit.
+
+Cloud side is fully managed by `agents/main.tf`:
+- `hermes-chat-ingress` topic + `chat-api-push@system.gserviceaccount.com` = Publisher
+- Router Cloud Function (2nd gen, Python) with Eventarc trigger on the ingress topic
+- Per-partner topics (`hermes-chat-<partner>`) and pull subscriptions (`hermes-chat-<partner>-sub`)
+- IAM: instance SA = Subscriber + Viewer on each per-partner sub
+- Router SA: Publisher on each per-partner topic, plus `run.invoker` at BOTH project
+  and service level (project-level alone is silently insufficient for CF 2nd gen)
+
+Add a partner = add an entry to `partner_map` in `agents/backoffice.tfvars` and
+`tofu apply -var-file=backoffice.tfvars`. Partner data is in the gitignored tfvars
+only; the tf code is fully parameterized.
 
 Hermes authenticates to Pub/Sub via ADC — `plugins/platforms/google_chat/adapter.py`
 falls back to `google.auth.default()` when `GOOGLE_CHAT_SERVICE_ACCOUNT_JSON` is unset,
 which picks up the instance SA. No per-partner SA, no key file on disk; the org policy
-`iam.disableServiceAccountKeyCreation` stays enforced. Tradeoff: GCP-level audit logs
-attribute all partners' subscription pulls to the instance SA (the subscription name still
-scopes each log entry to one partner, but identity is shared).
+`iam.disableServiceAccountKeyCreation` stays enforced. The router gives logical routing,
+not IAM isolation — accepted for three trusting co-founders. Migrate to per-partner SAs
+via impersonation before opening this up further.
 
-`.env`: `GOOGLE_CHAT_PROJECT_ID`, `GOOGLE_CHAT_SUBSCRIPTION_NAME`,
-`GOOGLE_CHAT_ALLOWED_USERS=<that partner only>`. Optional `/setup-files` per-user OAuth for
-native attachments.
+Per-partner container wiring is one script:
+```bash
+cd ~/backoffice/agents
+./add-partner.sh <partner> <partner@realia.com.br> hermes-<partner>
+```
+This writes the `GOOGLE_CHAT_*` env vars into `~/.hermes/.env` in the container,
+enables `platforms.google_chat.enabled: true` in `~/.hermes/config.yaml`, and
+restarts `hermes-gateway`. Idempotent — safe to re-run after a tofu apply that
+rotates partners.
 
-The `agents/provision-chat.sh` wrapper does all of the above end-to-end. The topic
-publisher binding is blocked by the `iam.allowedPolicyMemberDomains` (DRS) org policy by
-default — toggle a project-level override during apply, then restore it after (existing
-bindings persist). When the partner base grows past three trusting co-founders, move to
-one VM per partner so kernel-escape blast radius drops back to a single identity, and
-adopt per-partner SAs via WIF or impersonation.
+**One-time Chat app config** in the Console
+(https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat?project=…):
+- App status: **LIVE — available to users**
+- Connection: **Cloud Pub/Sub** → `projects/<project>/topics/hermes-chat-ingress`
+- Interactive features: ON
+- Functionality: "Join spaces and group conversations" checked
+- Visibility: allowlist the partner emails (`dan@…, hassan@…, luiz@…`)
+
+**DRS gotcha** (`[[drs-blocks-chat-push-binding]]`): the topic publisher binding for
+`chat-api-push@system.gserviceaccount.com` is blocked by the
+`iam.allowedPolicyMemberDomains` (Domain Restricted Sharing) org policy by default.
+Toggle a project-level override during apply, then restore (existing bindings persist
+on restore).
 
 ### 5.4 WhatsApp (partner "dan" only)
 Dedicated number (Google Voice / prepaid SIM / VoIP — not personal). `hermes whatsapp` →
@@ -338,3 +399,73 @@ sudo incus snapshot create hermes-dan configured
    with `sudo incus config set hermes-<name> limits.memory <N>GiB`.
 4. **Retire `dan-agent`** — keep as experiment sandbox or delete once `hermes-clean` is golden.
 5. **LiteLLM binary path in the systemd unit** (§3.10) — verify against `which litellm`.
+
+---
+
+## 8. Partner usage — finding and using your Hermes bot
+
+Once the partner's container is provisioned and `add-partner.sh` has been run,
+their bot is reachable from Google Chat. Send these instructions to each partner.
+
+### 8.1 Find the bot
+
+In Google Chat as your Workspace account (e.g. `dan@realia.com.br`):
+
+1. Open Chat — https://mail.google.com/chat or via the Gmail sidebar.
+2. Click **+ New chat** (the plus button next to "Direct messages" in the left rail).
+3. Type **`Hermes`** in the search box.
+4. Click the Hermes result — Chat opens a DM with the bot.
+
+If the bot doesn't appear, your email isn't in the Chat app's Visibility allowlist
+(see §5.3 — "Visibility: allowlist the partner emails"). The Workspace admin needs
+to add it. Note: changes can take up to 24 hours to propagate, but usually land within
+a few minutes.
+
+### 8.2 First message — the `/sethome` prompt
+
+The first time you message Hermes, you'll see a prompt before the real reply:
+
+> 📬 No home channel is set for Google_Chat. A home channel is where Hermes delivers
+> cron job results and cross-platform messages.
+>
+> Type `/sethome` to make this chat your home channel, or ignore to skip.
+
+This is **normal and expected** — Hermes asks every new platform once. Your two options:
+
+- **Type `/sethome`** (recommended for partners): pins this DM as where Hermes pushes
+  cron job output, scheduled reminders, and cross-platform notifications. Set once
+  and forget — survives container restarts. Almost certainly what you want for a
+  personal DM with your bot.
+- **Ignore it**: Hermes will keep responding to direct questions, but anything
+  scheduled (cron jobs, reminders, async deliveries) won't have a destination. You'll
+  see the prompt again on future fresh contexts.
+
+The bot replies to your original question right after the prompt either way.
+
+### 8.3 Day-to-day use
+
+- **Ask anything** — Hermes routes to Gemini 3.5 Flash via the Vertex backend and
+  has tool access (web search, terminal commands, file ops, scheduling).
+- **Schedule a check-in**: `remind me every weekday at 9am to review the kanban`.
+  Cron-style natural language; results are delivered to your home channel.
+- **Run a tool**: `what's the weather in São Paulo?` triggers a web lookup;
+  `summarize this URL: https://...` fetches and summarizes.
+- **Quirky behaviors to know about**:
+  - The bot's first reply after a long idle period may take a few seconds while
+    a Cloud Function scales up — subsequent messages are fast.
+  - Avatar / display name are app-level (one app, all partners) — that's intentional
+    given the muxed architecture. Your DM is still scoped to your account.
+
+### 8.4 If the bot stops responding
+
+Most common causes, in order of likelihood:
+
+1. **VM stopped** — check `gcloud compute instances list --project=<project>`.
+2. **Gateway service crashed** in your container — on the host,
+   `sudo incus exec hermes-<partner> -- systemctl status hermes-gateway --no-pager`.
+3. **Tofu drift** — someone applied/destroyed in `agents/` and the router CF is
+   redeploying. Check `gcloud functions logs read hermes-chat-router --gen2 --region=us-central1 --limit=10`.
+4. **Chat app config drift** — someone toggled "App status" off in the Console.
+
+Escalate to the maintainer with the output of whichever command surfaced something
+unusual. Full diagnostic path is in `agents/main.tf` comments and the project memory.
