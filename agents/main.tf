@@ -180,6 +180,21 @@ resource "google_project_iam_member" "router_run_invoker" {
   member  = "serviceAccount:${google_service_account.router.email}"
 }
 
+# Project-level run.invoker (above) is NECESSARY BUT NOT SUFFICIENT for
+# CF 2nd gen Eventarc triggers. The Cloud Run service backing the CF
+# checks its own service-level IAM policy on each invocation, and the
+# project grant doesn't get inherited reliably. Without this service-
+# level binding Eventarc deliveries are rejected with "The request was
+# not authenticated. Empty Authorization header value." even though
+# the SA shows up with run.invoker at the project level.
+resource "google_cloud_run_service_iam_member" "router_invoker_on_service" {
+  location = google_cloudfunctions2_function.router.location
+  project  = var.project
+  service  = google_cloudfunctions2_function.router.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.router.email}"
+}
+
 # Pub/Sub's service agent mints tokens for the CF runtime SA to deliver
 # events via push (Eventarc uses Pub/Sub push under the hood for CF 2nd gen).
 # Without this binding, Eventarc trigger creation fails with a vague
