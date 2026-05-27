@@ -246,7 +246,8 @@ resource "google_cloudfunctions2_function" "router" {
     # in the tfvars and re-applying updates this env var; CF picks up the new
     # config on the next cold start (or instantly on warm-start refresh).
     environment_variables = {
-      PARTNER_MAP = jsonencode(var.partner_map)
+      PARTNER_MAP          = jsonencode(var.partner_map)
+      GOOGLE_CLOUD_PROJECT = var.project
     }
   }
 
