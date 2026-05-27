@@ -88,6 +88,35 @@ if [[ -f "$CLIENT_SECRET" ]]; then
     --uid="$HERMES_UID" --gid="$HERMES_GID" --mode=0600
   CLIENT_SECRET_PRESENT=1
   echo "    pushed:       ${CLIENT_SECRET} -> /home/hermes/.hermes/client_secret.json"
+
+  # Seed a memory so Hermes knows where the OAuth credential lives without
+  # the partner having to specify it. Hermes auto-loads files in
+  # ~/.hermes/memories/ into its context.
+  sudo incus exec "$CONTAINER" --user "$HERMES_UID" \
+    --env HOME=/home/hermes -- bash -c '
+      set -e
+      mkdir -p /home/hermes/.hermes/memories
+      cat > /home/hermes/.hermes/memories/google-workspace-setup.md <<MEMEOF
+# Google Workspace setup — credential location
+
+The OAuth client_secret.json for this Hermes deployment is already on disk at:
+
+    /home/hermes/.hermes/client_secret.json
+
+When the user asks to set up Google Workspace (Gmail, Calendar, Drive,
+Docs, Sheets, People APIs, or "google workspace integration" generally),
+use that path directly. Do not ask the user where the file is — it has
+already been provisioned by add-partner.sh.
+
+This file is the shared Hermes app credential (identifies the app, not
+the user — same across all partners in the deployment). The per-user
+OAuth token gets written to ~/.hermes/google_token.json after the user
+approves the consent screen in their browser. That token is unique to
+the partner and only works as that partner Google identity.
+MEMEOF
+      chmod 600 /home/hermes/.hermes/memories/google-workspace-setup.md
+    '
+  echo "    seeded memory: ~/.hermes/memories/google-workspace-setup.md"
 else
   CLIENT_SECRET_PRESENT=0
   echo "    skipped:      no file at ${CLIENT_SECRET} (Workspace OAuth not configured for this partner)"
@@ -122,9 +151,8 @@ $( if [[ "${CLIENT_SECRET_PRESENT}" == "1" ]]; then cat <<INNER
 
 For Google Workspace integration (Gmail / Calendar / Drive), tell ${ALLOWED_EMAIL}:
   - DM Hermes: "set up google workspace"
-  - When asked for the OAuth credential path, paste:
-      /home/hermes/.hermes/client_secret.json
-  - Approve the browser consent as their own Workspace account.
+  - Hermes already knows the credential path (seeded via memory) and won't
+    ask for it. Just approve the browser consent as their Workspace account.
   - The resulting token lands at ~/.hermes/google_token.json — per-partner,
     no one else can use it.
 INNER
